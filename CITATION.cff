@@ -1,8 +1,0 @@
-cff-version: 1.2.0
-message: "If you use this software, please cite it as below."
-authors:
-- family-names: "Novella Rausell"
-  given-names: "Claudio"
-title: "Organoid Segmentation Pipeline"
-version: 0.1.0
-date-released: 2026-01-04
