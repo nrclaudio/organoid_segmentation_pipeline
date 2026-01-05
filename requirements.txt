@@ -1,0 +1,21 @@
+spatialdata
+scanpy
+squidpy
+geopandas<1.0
+shapely
+rasterio
+click
+lightning
+torchmetrics
+adjustText
+pqdm
+rtree
+# PyG dependencies (usually better installed via pip with -f link, but pip handles recent versions)
+torch_geometric
+pyg_lib
+torch_scatter
+torch_sparse
+torch_cluster
+torch_spline_conv
+dask-geopandas
+pyarrow

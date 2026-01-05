@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+*.zarr
+*.h5ad
+*.tif
+segger_inputs/
+segger_datasets/
+segger_models/
+kidneys/
+realigned_*/
