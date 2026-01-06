@@ -10,7 +10,10 @@ torchmetrics
 adjustText
 pqdm
 rtree
-# PyG dependencies (usually better installed via pip with -f link, but pip handles recent versions)
+scipy
+tifffile
+# PyG dependencies
+ (usually better installed via pip with -f link, but pip handles recent versions)
 torch_geometric
 pyg_lib
 torch_scatter

@@ -14,7 +14,8 @@ WORKDIR /app
 RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
 # Install pipeline requirements
-# We assume the build context is the root 'segmentation' folder
+# CRITICAL: Build context must be the 'segmentation/' root directory
+# example: docker build -t organoid-pipeline -f organoid_segmentation_pipeline/Dockerfile .
 COPY organoid_segmentation_pipeline/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
