@@ -40,8 +40,9 @@ except ImportError as e:
     print("Please ensure you are running this script within the 'segger_mac' environment.")
     sys.exit(1)
 
-def get_similarity_scores_cpu(model, batch, from_type, to_type, k_to, dist_to):
-    # Compute similarity scores on CPU
+def get_similarity_scores(model, batch, from_type, to_type, k_to, dist_to):
+    # Compute similarity scores on best available device
+    device = batch[from_type].x.device
     shape = batch[from_type].x.shape[0], batch[to_type].x.shape[0]
     
     # Compute edge indices (CPU KDTree)
@@ -52,14 +53,14 @@ def get_similarity_scores_cpu(model, batch, from_type, to_type, k_to, dist_to):
         coords_2 = batch[from_type].pos[:, :2]
         
     edge_index = get_edge_index(
-        coords_1,
-        coords_2,
+        coords_1.cpu(),
+        coords_2.cpu(),
         k=k_to,
         dist=dist_to,
         method="kd_tree"
-    )
+    ).to(device)
     
-    # Convert to dense adjacency (CPU)
+    # Convert to dense adjacency
     edge_index = coo_to_dense_adj(edge_index.T, num_nodes=shape[0], num_nbrs=k_to)
     
     model.eval()
@@ -69,35 +70,32 @@ def get_similarity_scores_cpu(model, batch, from_type, to_type, k_to, dist_to):
     emb_to = embeddings[to_type]
     emb_from = embeddings[from_type]
     
-    # Gather neighbors
-    # emb_to: [N_to, D]
-    # edge_index: [N_to, K] containing indices of 'from' nodes
-    
     # Handle padding (-1)
     mask = edge_index != -1
     flat_indices = edge_index[mask]
     
-    # Gather 'from' embeddings for valid neighbors
-    gathered_from = emb_from[flat_indices] # [Valid_Edges, D]
+    # Gather 'from' embeddings
+    gathered_from = emb_from[flat_indices]
     
-    # Repeat 'to' embeddings for valid neighbors
-    row_indices = torch.arange(shape[0], device=edge_index.device).unsqueeze(1).expand_as(edge_index)
+    # Repeat 'to' embeddings
+    row_indices = torch.arange(shape[0], device=device).unsqueeze(1).expand_as(edge_index)
     flat_rows = row_indices[mask]
-    gathered_to = emb_to[flat_rows] # [Valid_Edges, D]
+    gathered_to = emb_to[flat_rows]
     
-    # Compute dot product
+    # Compute dot product and sigmoid on device
     similarity = (gathered_to * gathered_from).sum(dim=1)
     similarity = torch.sigmoid(similarity)
     
-    values = similarity.numpy()
-    rows = flat_rows.numpy()
-    cols = flat_indices.numpy()
+    # Move back to CPU for SciPy sparse matrix
+    values = similarity.cpu().numpy()
+    rows = flat_rows.cpu().numpy()
+    cols = flat_indices.cpu().numpy()
     
     return coo_matrix((values, (rows, cols)), shape=shape)
 
-def predict_batch_cpu(model, batch, score_cut=0.5, use_cc=True):
-    # CPU version of predict_batch
-    transcript_id = batch["tx"].id.numpy().astype(str)
+def predict_batch(model, batch, score_cut=0.5, use_cc=True):
+    # Device-agnostic version of predict_batch
+    transcript_id = batch["tx"].id.cpu().numpy().astype(str)
     assignments = pd.DataFrame({"transcript_id": transcript_id})
     assignments["score"] = 0.0
     assignments["segger_cell_id"] = None
@@ -106,8 +104,8 @@ def predict_batch_cpu(model, batch, score_cut=0.5, use_cc=True):
     if len(batch["bd"].pos) < 10:
         return assignments
 
-    # tx -> bd
-    scores = get_similarity_scores_cpu(model, batch, "tx", "bd", k_to=4, dist_to=12.0) # Using defaults from predict_fast
+    # tx -> bd (expansion)
+    scores = get_similarity_scores(model, batch, "tx", "bd", k_to=4, dist_to=12.0)
     dense_scores = scores.toarray()
     
     if dense_scores.shape[1] == 0:
@@ -118,38 +116,28 @@ def predict_batch_cpu(model, batch, score_cut=0.5, use_cc=True):
     
     mask = max_scores > score_cut
     
-    all_ids = np.concatenate(batch["bd"].id)
+    all_ids = np.concatenate(batch["bd"].id.cpu().numpy())
     max_indices = dense_scores.argmax(axis=1)
     
     assignments.loc[mask, "segger_cell_id"] = all_ids[max_indices[mask]]
     assignments.loc[mask, "bound"] = 1
     
-    # Refine unassigned using connected components (tx -> tx)
+    # tx -> tx (floating cells)
     if use_cc:
         unassigned_mask = assignments["segger_cell_id"].isna()
         if unassigned_mask.any():
-            # Only compute for unassigned to save time? 
-            # Or compute full tx-tx and filter? Full tx-tx is safer for graph structure.
-            # But CPU is slow. Let's try full.
-            
-            scores_tx = get_similarity_scores_cpu(model, batch, "tx", "tx", k_to=5, dist_to=5.0)
+            scores_tx = get_similarity_scores(model, batch, "tx", "tx", k_to=5, dist_to=5.0)
             dense_tx = scores_tx.toarray()
             
-            # Filter for unassigned
             sub_matrix = dense_tx[unassigned_mask][:, unassigned_mask]
-            
-            # Apply threshold
             sub_matrix[sub_matrix < score_cut] = 0
             
-            # Connected components
             n_comps, labels = connected_components(sub_matrix, connection='weak', directed=False)
             
-            # Generate new IDs
             def _get_id():
                 return "".join(np.random.choice(list("abcdefghijklmnopqrstuvwxyz"), 8)) + "-nx"
             
             new_ids = np.array([_get_id() for _ in range(n_comps)])
-            
             assignments.loc[unassigned_mask, "segger_cell_id"] = new_ids[labels]
             
     return assignments
@@ -157,38 +145,45 @@ def predict_batch_cpu(model, batch, score_cut=0.5, use_cc=True):
 def predict_sample(dataset_dir, model_dir, output_dir, raw_input_dir, args):
     print(f"  Predicting on {dataset_dir}...")
     
-    # 1. Load Model
+    # 1. Detect Device
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    print(f"    Using device for inference: {device}")
+
+    # 2. Load Model
     ckpt_glob = list((model_dir / "lightning_logs").glob("version_*/checkpoints/*.ckpt"))
     if not ckpt_glob:
         print("    No checkpoint found. Skipping prediction.")
         return
     
-    # Sort by modification time to get latest
     ckpt_path = sorted(ckpt_glob, key=lambda p: p.stat().st_mtime)[-1]
     print(f"    Loading checkpoint: {ckpt_path.name}")
     
     model = LitSegger.load_from_checkpoint(ckpt_path)
+    model.to(device)
     model.eval()
     
-    # 2. Data Module (Load all tiles)
-    # We iterate through all tiles (train/val/test) to get full coverage
+    # 3. Data Module
     dm = SeggerDataModule(
         data_dir=dataset_dir,
         batch_size=1,
-        num_workers=0 # Force 0 for safety on CPU prediction
+        num_workers=0 
     )
     dm.setup()
     
     all_assignments = []
-    
-    # Iterate all loaders
     loaders = [dm.train_dataloader(), dm.val_dataloader(), dm.test_dataloader()]
     
     print("    Running inference on tiles...")
     for loader in loaders:
         for batch in tqdm(loader, leave=False):
-            # Run prediction on CPU
-            df = predict_batch_cpu(model.model, batch, score_cut=0.5, use_cc=True)
+            # Move batch to device
+            batch = batch.to(device)
+            # Run prediction (Torch math will happen on GPU/MPS, logic on CPU)
+            df = predict_batch(model.model, batch, score_cut=0.5, use_cc=True)
             all_assignments.append(df)
             
     if not all_assignments:
