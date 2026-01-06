@@ -70,6 +70,20 @@ python run_segger_pipeline.py
 ```
 *Output: `segger_datasets/` and `segger_models/`.*
 
+### Option: Parallel Execution with Snakemake
+
+For faster processing (especially for Step 2 and 3), you can use the included `Snakefile`.
+
+1.  **Run Step 1** manually to extract kidneys:
+    ```bash
+    python process_all_chips.py
+    ```
+2.  **Run Snakemake** to parallelize preparation and training:
+    ```bash
+    # Install snakemake if needed: pip install snakemake
+    snakemake --cores 4
+    ```
+
 ### Docker Usage
 
 To build the Docker image, you must run the build command **from the project root** (`segmentation/`) so that it can access both `segger` and the pipeline.

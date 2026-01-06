@@ -140,6 +140,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--workers", type=int, default=0) # Default to 0 to avoid OOM
+    parser.add_argument("--sample", type=str, help="Specific sample name to process (overrides scanning inputs-dir)")
     args = parser.parse_args()
     
     inputs_dir = Path(args.inputs_dir)
@@ -149,7 +150,14 @@ def main():
     datasets_dir.mkdir(exist_ok=True)
     models_dir.mkdir(exist_ok=True)
     
-    samples = sorted([d for d in inputs_dir.iterdir() if d.is_dir()])
+    if args.sample:
+        sample_dir = inputs_dir / args.sample
+        if not sample_dir.exists():
+             print(f"Error: Sample {args.sample} not found in {inputs_dir}")
+             return
+        samples = [sample_dir]
+    else:
+        samples = sorted([d for d in inputs_dir.iterdir() if d.is_dir()])
     
     if not samples:
         print("No samples found.")

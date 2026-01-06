@@ -20,22 +20,29 @@ SEGGER_SRC = SEGGER_REPO / "src"
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--kidneys-dir", default="kidneys", help="Directory containing extracted kidney .sdata.zarr files")
+    parser.add_argument("--input-file", help="Path to a single .sdata.zarr file to process (overrides --kidneys-dir scanning)")
     parser.add_argument("--out-dir", default="segger_inputs", help="Output directory for Segger data")
     parser.add_argument("--segger-python", help="Python executable for Segger conversion tool (if different from current)")
     args = parser.parse_args()
     
-    kidneys_dir = Path(args.kidneys_dir)
     out_dir = Path(args.out_dir)
-    
     segger_py = args.segger_python if args.segger_python else sys.executable
     out_dir.mkdir(exist_ok=True)
     
-    # Find all kidney zarrs
-    zarrs = sorted(list(kidneys_dir.glob("*_kidney*.sdata.zarr")))
-    
-    if not zarrs:
-        print(f"No kidney zarrs found in {kidneys_dir}")
-        return
+    if args.input_file:
+        input_path = Path(args.input_file)
+        if not input_path.exists():
+            print(f"Error: Input file {input_path} does not exist.")
+            return
+        zarrs = [input_path]
+    else:
+        kidneys_dir = Path(args.kidneys_dir)
+        # Find all kidney zarrs
+        zarrs = sorted(list(kidneys_dir.glob("*_kidney*.sdata.zarr")))
+        
+        if not zarrs:
+            print(f"No kidney zarrs found in {kidneys_dir}")
+            return
 
     print(f"Found {len(zarrs)} kidneys to process.")
     
