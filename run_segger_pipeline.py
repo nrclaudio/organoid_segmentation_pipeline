@@ -5,6 +5,11 @@ import os
 import torch
 import logging
 import pandas as pd
+import warnings
+
+# Suppress shapely warnings regarding oriented_envelope
+warnings.filterwarnings("ignore", category=RuntimeWarning, message="divide by zero encountered in oriented_envelope")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in oriented_envelope")
 
 # Ensure segger is importable
 # Check current dir or sibling dir
@@ -134,7 +139,7 @@ def main():
     parser.add_argument("--models-dir", default="segger_models")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--workers", type=int, default=4) # Parallel workers
+    parser.add_argument("--workers", type=int, default=0) # Default to 0 to avoid OOM
     args = parser.parse_args()
     
     inputs_dir = Path(args.inputs_dir)
@@ -160,7 +165,7 @@ def main():
         m_out = models_dir / name
         
         # 1. Create Dataset
-        if (d_out / "processed").exists():
+        if (d_out / "train_tiles" / "processed").exists():
             print("  Dataset exists, skipping.")
         else:
             try:

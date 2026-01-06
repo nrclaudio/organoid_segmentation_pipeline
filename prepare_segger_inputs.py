@@ -7,6 +7,7 @@ import scanpy as sc
 import os
 import tifffile
 import numpy as np
+from scipy.ndimage import label
 
 # Adjust path to find segger if not installed
 # Check current dir or sibling dir
@@ -20,10 +21,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--kidneys-dir", default="kidneys", help="Directory containing extracted kidney .sdata.zarr files")
     parser.add_argument("--out-dir", default="segger_inputs", help="Output directory for Segger data")
+    parser.add_argument("--segger-python", help="Python executable for Segger conversion tool (if different from current)")
     args = parser.parse_args()
     
     kidneys_dir = Path(args.kidneys_dir)
     out_dir = Path(args.out_dir)
+    
+    segger_py = args.segger_python if args.segger_python else sys.executable
     out_dir.mkdir(exist_ok=True)
     
     # Find all kidney zarrs
@@ -49,7 +53,7 @@ def main():
         print(f"Processing {name}...")
         
         try:
-            sdata = sd.read_zarr(z_path)
+            sdata = sd.read_zarr(z_path.resolve())
             
             if not sdata.tables:
                 print(f"No tables found in {z_path}, skipping.")
@@ -77,6 +81,10 @@ def main():
                 
                 if mask.ndim == 3: mask = mask[0]
                 
+                # Label connected components so each nucleus has a unique ID
+                mask, _ = label(mask)
+                mask = mask.astype(np.int32)
+                
                 temp_labels = out_dir / f"{name}_labels_temp.tif"
                 tifffile.imwrite(temp_labels, mask)
             
@@ -84,7 +92,7 @@ def main():
             script_path = SEGGER_SRC / "segger" / "cli" / "convert_saw_h5ad_to_segger_parquet.py"
             
             cmd = [
-                sys.executable, str(script_path),
+                segger_py, str(script_path),
                 "--h5ad", str(temp_h5ad),
                 "--out_dir", str(sample_out),
                 "--bin_pitch", "1.0",
