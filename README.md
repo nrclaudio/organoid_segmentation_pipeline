@@ -44,10 +44,10 @@ Before running the main pipeline on macOS, you must convert the raw `.tissue.gef
 
 ---
 
-### Step 1: Local Processing (macOS)
-*Requires `segger_mac` environment (see `../segger/README.md`).*
+### Step 1: Local / Workstation Processing (macOS or Linux)
+*Requires `segger` environment (see `../segger/README.md`).*
 
-Once you have the `_tissue.h5ad` files locally (mirroring the folder structure), you can run the segmentation pipeline.
+Once you have the `_tissue.h5ad` files locally or on your workstation (mirroring the folder structure), you can run the segmentation pipeline.
 
 **1. Extract Kidneys:**
 Converts H5AD + Images -> SpatialData -> Individual Kidney Crops.
