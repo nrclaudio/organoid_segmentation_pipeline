@@ -6,6 +6,13 @@ import torch
 import logging
 import pandas as pd
 import warnings
+import glob
+import re
+from tqdm import tqdm
+import numpy as np
+import torch.nn.functional as F
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
 
 # Suppress shapely warnings regarding oriented_envelope
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="divide by zero encountered in oriented_envelope")
@@ -27,10 +34,207 @@ try:
     from segger.training.segger_data_module import SeggerDataModule
     from pytorch_lightning import Trainer
     from pytorch_lightning.loggers import CSVLogger
+    from segger.data.utils import get_edge_index, create_anndata, coo_to_dense_adj
 except ImportError as e:
     print(f"Error importing Segger modules: {e}")
     print("Please ensure you are running this script within the 'segger_mac' environment.")
     sys.exit(1)
+
+def get_similarity_scores_cpu(model, batch, from_type, to_type, k_to, dist_to):
+    # Compute similarity scores on CPU
+    shape = batch[from_type].x.shape[0], batch[to_type].x.shape[0]
+    
+    # Compute edge indices (CPU KDTree)
+    if from_type == to_type:
+        coords_1 = coords_2 = batch[to_type].pos
+    else:
+        coords_1 = batch[to_type].pos[:, :2]
+        coords_2 = batch[from_type].pos[:, :2]
+        
+    edge_index = get_edge_index(
+        coords_1,
+        coords_2,
+        k=k_to,
+        dist=dist_to,
+        method="kd_tree"
+    )
+    
+    # Convert to dense adjacency (CPU)
+    edge_index = coo_to_dense_adj(edge_index.T, num_nodes=shape[0], num_nbrs=k_to)
+    
+    model.eval()
+    with torch.no_grad():
+        embeddings = model(batch.x_dict, batch.edge_index_dict)
+    
+    emb_to = embeddings[to_type]
+    emb_from = embeddings[from_type]
+    
+    # Gather neighbors
+    # emb_to: [N_to, D]
+    # edge_index: [N_to, K] containing indices of 'from' nodes
+    
+    # Handle padding (-1)
+    mask = edge_index != -1
+    flat_indices = edge_index[mask]
+    
+    # Gather 'from' embeddings for valid neighbors
+    gathered_from = emb_from[flat_indices] # [Valid_Edges, D]
+    
+    # Repeat 'to' embeddings for valid neighbors
+    row_indices = torch.arange(shape[0], device=edge_index.device).unsqueeze(1).expand_as(edge_index)
+    flat_rows = row_indices[mask]
+    gathered_to = emb_to[flat_rows] # [Valid_Edges, D]
+    
+    # Compute dot product
+    similarity = (gathered_to * gathered_from).sum(dim=1)
+    similarity = torch.sigmoid(similarity)
+    
+    values = similarity.numpy()
+    rows = flat_rows.numpy()
+    cols = flat_indices.numpy()
+    
+    return coo_matrix((values, (rows, cols)), shape=shape)
+
+def predict_batch_cpu(model, batch, score_cut=0.5, use_cc=True):
+    # CPU version of predict_batch
+    transcript_id = batch["tx"].id.numpy().astype(str)
+    assignments = pd.DataFrame({"transcript_id": transcript_id})
+    assignments["score"] = 0.0
+    assignments["segger_cell_id"] = None
+    assignments["bound"] = 0
+    
+    if len(batch["bd"].pos) < 10:
+        return assignments
+
+    # tx -> bd
+    scores = get_similarity_scores_cpu(model, batch, "tx", "bd", k_to=4, dist_to=12.0) # Using defaults from predict_fast
+    dense_scores = scores.toarray()
+    
+    if dense_scores.shape[1] == 0:
+        return assignments
+
+    max_scores = dense_scores.max(axis=1)
+    assignments["score"] = max_scores
+    
+    mask = max_scores > score_cut
+    
+    all_ids = np.concatenate(batch["bd"].id)
+    max_indices = dense_scores.argmax(axis=1)
+    
+    assignments.loc[mask, "segger_cell_id"] = all_ids[max_indices[mask]]
+    assignments.loc[mask, "bound"] = 1
+    
+    # Refine unassigned using connected components (tx -> tx)
+    if use_cc:
+        unassigned_mask = assignments["segger_cell_id"].isna()
+        if unassigned_mask.any():
+            # Only compute for unassigned to save time? 
+            # Or compute full tx-tx and filter? Full tx-tx is safer for graph structure.
+            # But CPU is slow. Let's try full.
+            
+            scores_tx = get_similarity_scores_cpu(model, batch, "tx", "tx", k_to=5, dist_to=5.0)
+            dense_tx = scores_tx.toarray()
+            
+            # Filter for unassigned
+            sub_matrix = dense_tx[unassigned_mask][:, unassigned_mask]
+            
+            # Apply threshold
+            sub_matrix[sub_matrix < score_cut] = 0
+            
+            # Connected components
+            n_comps, labels = connected_components(sub_matrix, connection='weak', directed=False)
+            
+            # Generate new IDs
+            def _get_id():
+                return "".join(np.random.choice(list("abcdefghijklmnopqrstuvwxyz"), 8)) + "-nx"
+            
+            new_ids = np.array([_get_id() for _ in range(n_comps)])
+            
+            assignments.loc[unassigned_mask, "segger_cell_id"] = new_ids[labels]
+            
+    return assignments
+
+def predict_sample(dataset_dir, model_dir, output_dir, raw_input_dir, args):
+    print(f"  Predicting on {dataset_dir}...")
+    
+    # 1. Load Model
+    ckpt_glob = list((model_dir / "lightning_logs").glob("version_*/checkpoints/*.ckpt"))
+    if not ckpt_glob:
+        print("    No checkpoint found. Skipping prediction.")
+        return
+    
+    # Sort by modification time to get latest
+    ckpt_path = sorted(ckpt_glob, key=lambda p: p.stat().st_mtime)[-1]
+    print(f"    Loading checkpoint: {ckpt_path.name}")
+    
+    model = LitSegger.load_from_checkpoint(ckpt_path)
+    model.eval()
+    
+    # 2. Data Module (Load all tiles)
+    # We iterate through all tiles (train/val/test) to get full coverage
+    dm = SeggerDataModule(
+        data_dir=dataset_dir,
+        batch_size=1,
+        num_workers=0 # Force 0 for safety on CPU prediction
+    )
+    dm.setup()
+    
+    all_assignments = []
+    
+    # Iterate all loaders
+    loaders = [dm.train_dataloader(), dm.val_dataloader(), dm.test_dataloader()]
+    
+    print("    Running inference on tiles...")
+    for loader in loaders:
+        for batch in tqdm(loader, leave=False):
+            # Run prediction on CPU
+            df = predict_batch_cpu(model.model, batch, score_cut=0.5, use_cc=True)
+            all_assignments.append(df)
+            
+    if not all_assignments:
+        print("    No assignments generated.")
+        return
+
+    full_df = pd.concat(all_assignments, ignore_index=True)
+    
+    # Resolve duplicates (transcripts appearing in multiple tiles due to padding/overlap)
+    # Prefer assigned (bound=1) and higher score
+    full_df = full_df.sort_values(["bound", "score"], ascending=[False, False])
+    full_df = full_df.drop_duplicates(subset="transcript_id", keep="first")
+    
+    # Merge with original transcripts to get gene names and coordinates
+    transcripts_file = raw_input_dir / "transcripts.parquet"
+    if transcripts_file.exists():
+        orig_df = pd.read_parquet(transcripts_file)
+        orig_df["transcript_id"] = orig_df["transcript_id"].astype(str)
+        
+        merged_df = orig_df.merge(full_df, on="transcript_id", how="left")
+        
+        # Save results
+        out_file = output_dir / f"{raw_input_dir.name}_segmentation.parquet"
+        merged_df.to_parquet(out_file)
+        print(f"    Saved segmentation to {out_file}")
+        
+        # Create H5AD (CellBin)
+        # We need 'cell_id' column for create_anndata. Segger uses 'segger_cell_id'
+        merged_df["cell_id"] = merged_df["segger_cell_id"].fillna("UNASSIGNED")
+        
+        # Map back to original coordinate system if needed?
+        # transcripts.parquet usually has global x/y.
+        # We need columns: cell_id, feature_name (gene), x, y
+        # orig_df has 'gene_id', need mapping to names?
+        genes_file = raw_input_dir / "genes.parquet"
+        if genes_file.exists():
+            genes_df = pd.read_parquet(genes_file)
+            gene_map = dict(zip(genes_df.gene_id, genes_df.gene_name))
+            merged_df["feature_name"] = merged_df["gene_id"].map(gene_map)
+            merged_df.rename(columns={"x": "x_location", "y": "y_location"}, inplace=True)
+            
+            print("    Creating AnnData...")
+            adata = create_anndata(merged_df, min_transcripts=3)
+            adata_out = output_dir / f"{raw_input_dir.name}_segmentation.h5ad"
+            adata.write_h5ad(adata_out)
+            print(f"    Saved AnnData to {adata_out}")
 
 def create_dataset(input_dir, output_dir, args):
     print(f"  Creating Dataset from {input_dir}...")
@@ -184,16 +388,48 @@ def main():
                 traceback.print_exc()
                 continue
             
-        # 2. Train
-        if (m_out / "lightning_logs").exists():
-             print("  Model logs exist, skipping training (delete to retrain).")
-        else:
-             try:
-                 train_sample(d_out, m_out, sample_dir, args)
-             except Exception as e:
-                 print(f"  Failed to train: {e}")
-                 import traceback
-                 traceback.print_exc()
-
-if __name__ == "__main__":
-    main()
+                # 2. Train
+            
+                if (m_out / "lightning_logs").exists():
+            
+                     print("  Model logs exist, skipping training (delete to retrain).")
+            
+                else:
+            
+                     try:
+            
+                         train_sample(d_out, m_out, sample_dir, args)
+            
+                     except Exception as e:
+            
+                         print(f"  Failed to train: {e}")
+            
+                         import traceback
+            
+                         traceback.print_exc()
+            
+                         continue
+            
+        
+            
+                # 3. Predict
+            
+                try:
+            
+                    predict_sample(d_out, m_out, m_out, sample_dir, args)
+            
+                except Exception as e:
+            
+                    print(f"  Failed to predict: {e}")
+            
+                    import traceback
+            
+                    traceback.print_exc()
+            
+        
+            
+        if __name__ == "__main__":
+            
+            main()
+            
+        
