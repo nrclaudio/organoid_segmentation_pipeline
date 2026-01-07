@@ -42,7 +42,7 @@ SAMPLE_IDX=$SLURM_ARRAY_TASK_ID
 if [ "$SAMPLE_IDX" -ge "$NUM_SAMPLES" ]; then
     echo "Error: Array index $SAMPLE_IDX exceeds number of samples ($NUM_SAMPLES)."
     exit 1
-}
+fi
 
 SAMPLE=${SAMPLES[$SAMPLE_IDX]}
 
