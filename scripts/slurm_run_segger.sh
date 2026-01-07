@@ -3,7 +3,7 @@
 #SBATCH --output=logs/segger_%A_%a.out
 #SBATCH --error=logs/segger_%A_%a.err
 #SBATCH --time=04:00:00
-#SBATCH --mem=32G
+#SBATCH --mem=128G
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
 #SBATCH --partition=gpu
@@ -15,12 +15,20 @@
 
 # 1. Environment Setup
 module purge || true
-# Load necessary modules (Uncomment and adjust if your HPC requires module loading for CUDA)
-# module load cuda/11.7 
+echo "cuda"
+module add library/cuda/12.2.2/gcc.8.5.0
+echo "cudnn"
+module add library/cudnn/12.2/cudnn
+echo "conda"
+module add tools/miniconda/python3.8/4.9.2
 
-# Initialize Conda
+hostname
+echo "Cuda devices: $CUDA_VISIBLE_DEVICES"
+nvidia-smi
+
+# Initialize Conda (using the module-provided conda)
 source $(conda info --base)/etc/profile.d/conda.sh
-conda activate segger_env  # <--- VERIFY THIS environment name on your server
+conda activate segger_env
 
 # 2. Setup Paths
 # Navigate to the pipeline directory if not already there
