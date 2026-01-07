@@ -22,3 +22,4 @@ torch_cluster
 torch_spline_conv
 dask-geopandas
 pyarrow
+moscot
