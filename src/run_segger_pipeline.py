@@ -13,23 +13,124 @@ import numpy as np
 import torch.nn.functional as F
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
+from lightning.pytorch.loggers import CSVLogger
+from lightning.pytorch import Trainer
 
 # Suppress shapely warnings regarding oriented_envelope
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="divide by zero encountered in oriented_envelope")
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in oriented_envelope")
 
 # Ensure segger is importable
-# Reorganization: segger is now in tools/segger
-# Script in pipeline/src -> parent=pipeline -> parent.parent=root -> tools/segger
 SEGGER_REPO = Path(__file__).resolve().parent.parent.parent / "tools" / "segger"
-
 SEGGER_SRC = SEGGER_REPO / "src"
 if str(SEGGER_SRC) not in sys.path:
     sys.path.insert(0, str(SEGGER_SRC))
 
-# ... imports ...
+from segger.data.io import XeniumSample
+from segger.training.train import LitSegger
+from segger.training.segger_data_module import SeggerDataModule
+from segger.prediction.predict_parquet import segment, load_model
 
-# ... functions ...
+def create_dataset(sample_dir, d_out, args):
+    """Create a Segger-compatible dataset from parquets."""
+    print(f"  Creating dataset in {d_out}...")
+    xs = XeniumSample(verbose=True)
+    xs.set_file_paths(
+        transcripts_path=sample_dir / "transcripts.parquet",
+        boundaries_path=sample_dir / "boundaries.parquet",
+    )
+    xs.set_metadata()
+    
+    # Save dataset with standard tile sizes
+    xs.save_dataset_for_segger(
+        processed_dir=d_out,
+        x_size=220,
+        y_size=220,
+        d_x=200,
+        d_y=200,
+        margin_x=10,
+        margin_y=10,
+        compute_labels=True,
+        num_workers=args.workers if args.workers > 0 else 1
+    )
+
+def train_sample(d_out, m_out, sample_dir, args):
+    """Train a Segger model on the sample dataset."""
+    print(f"  Training model in {m_out}...")
+    dm = SeggerDataModule(
+        data_dir=d_out,
+        batch_size=args.batch_size,
+        num_workers=args.workers,
+    )
+    dm.setup()
+
+    # Define GNN metadata
+    metadata = (["tx", "bd"], [("tx", "belongs", "bd"), ("tx", "neighbors", "tx")])
+    
+    # Initialize model
+    # num_tx_tokens 1000 is usually safe for filtered gene sets
+    ls = LitSegger(
+        num_tx_tokens=10000, 
+        init_emb=8,
+        hidden_channels=64,
+        out_channels=16,
+        heads=4,
+        num_mid_layers=1,
+        aggr="sum",
+        metadata=metadata,
+    )
+
+    trainer = Trainer(
+        accelerator="auto",
+        devices=1,
+        max_epochs=args.epochs,
+        default_root_dir=m_out,
+        logger=CSVLogger(m_out),
+        precision="16-mixed" if torch.cuda.is_available() else 32
+    )
+
+    trainer.fit(model=ls, datamodule=dm)
+
+def predict_sample(d_out, m_out, results_dir, sample_dir, args):
+    """Run prediction using the trained model."""
+    print(f"  Running prediction...")
+    
+    # Load the best/latest checkpoint
+    ckpt_dir = m_out / "lightning_logs" / "version_0" / "checkpoints"
+    if not ckpt_dir.exists():
+        # Try to find any version if version_0 isn't there
+        versions = sorted(glob.glob(str(m_out / "lightning_logs" / "version_*")), reverse=True)
+        if versions:
+            ckpt_dir = Path(versions[0]) / "checkpoints"
+        else:
+            raise FileNotFoundError(f"No checkpoints found in {m_out}")
+
+    model = load_model(ckpt_dir)
+    
+    dm = SeggerDataModule(
+        data_dir=d_out,
+        batch_size=1,
+        num_workers=0,
+    )
+    dm.setup()
+
+    receptive_field = {"k_bd": 4, "dist_bd": 15, "k_tx": 5, "dist_tx": 3}
+
+    segment(
+        model,
+        dm,
+        save_dir=results_dir,
+        seg_tag=sample_dir.name,
+        transcript_file=sample_dir / "transcripts.parquet",
+        receptive_field=receptive_field,
+        min_transcripts=5,
+        score_cut=0.1,
+        cell_id_col="segger_cell_id",
+        use_cc=False,
+        knn_method="kd_tree",
+        verbose=True,
+        gpu_ids=["0"] if torch.cuda.is_available() else None,
+    )
 
 def main():
     parser = argparse.ArgumentParser()
@@ -46,8 +147,8 @@ def main():
     datasets_dir = Path(args.datasets_dir)
     models_dir = Path(args.models_dir)
     
-    datasets_dir.mkdir(exist_ok=True)
-    models_dir.mkdir(exist_ok=True)
+    datasets_dir.mkdir(exist_ok=True, parents=True)
+    models_dir.mkdir(exist_ok=True, parents=True)
     
     if args.sample:
         sample_dir = inputs_dir / args.sample
