@@ -10,18 +10,16 @@ import numpy as np
 from scipy.ndimage import label
 
 # Adjust path to find segger if not installed
-# Check current dir or sibling dir
-SEGGER_REPO = Path(__file__).resolve().parent / "segger"
-if not SEGGER_REPO.exists():
-    SEGGER_REPO = Path(__file__).resolve().parent.parent / "segger"
+# Reorganization: segger is now in tools/segger
+SEGGER_REPO = Path(__file__).resolve().parent.parent / "tools" / "segger"
 
 SEGGER_SRC = SEGGER_REPO / "src"
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--kidneys-dir", default="kidneys", help="Directory containing extracted kidney .sdata.zarr files")
+    parser.add_argument("--kidneys-dir", default="../data/processed/kidneys", help="Directory containing extracted kidney .sdata.zarr files")
     parser.add_argument("--input-file", help="Path to a single .sdata.zarr file to process (overrides --kidneys-dir scanning)")
-    parser.add_argument("--out-dir", default="segger_inputs", help="Output directory for Segger data")
+    parser.add_argument("--out-dir", default="../data/processed/segger_data/segger_inputs", help="Output directory for Segger data")
     parser.add_argument("--segger-python", help="Python executable for Segger conversion tool (if different from current)")
     args = parser.parse_args()
     

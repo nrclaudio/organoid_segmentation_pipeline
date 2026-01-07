@@ -19,218 +19,22 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, message="divide by ze
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in oriented_envelope")
 
 # Ensure segger is importable
-# Check current dir or sibling dir
-SEGGER_REPO = Path(__file__).resolve().parent / "segger"
-if not SEGGER_REPO.exists():
-    SEGGER_REPO = Path(__file__).resolve().parent.parent / "segger"
+# Reorganization: segger is now in tools/segger
+SEGGER_REPO = Path(__file__).resolve().parent.parent / "tools" / "segger"
 
 SEGGER_SRC = SEGGER_REPO / "src"
 if str(SEGGER_SRC) not in sys.path:
     sys.path.insert(0, str(SEGGER_SRC))
 
-try:
-    from segger.data.parquet.sample import STSampleParquet
-    from segger.training.train import LitSegger
-    from segger.training.segger_data_module import SeggerDataModule
-    from pytorch_lightning import Trainer
-    from pytorch_lightning.loggers import CSVLogger
-    from segger.data.utils import create_anndata
-    # from segger.prediction import torch_predict # Moved to predict_sample
+# ... imports ...
 
-except ImportError as e:
-    import traceback
-    traceback.print_exc()
-    print(f"Error importing Segger modules: {e}")
-    print("Please ensure you are running this script within the 'segger_mac' environment.")
-    sys.exit(1)
-
-def predict_sample(dataset_dir, model_dir, output_dir, raw_input_dir, args):
-    print(f"  Predicting on {dataset_dir}...")
-    
-    # 1. Detect Device
-    device = "cpu"
-    if torch.cuda.is_available():
-        device = "cuda"
-    elif torch.backends.mps.is_available():
-        device = "mps"
-    print(f"    Using device for inference: {device}")
-
-    # 2. Load Model
-    ckpt_glob = list((model_dir / "lightning_logs").glob("version_*/checkpoints/*.ckpt"))
-    if not ckpt_glob:
-        print("    No checkpoint found. Skipping prediction.")
-        return
-    
-    ckpt_path = sorted(ckpt_glob, key=lambda p: p.stat().st_mtime)[-1]
-    print(f"    Loading checkpoint: {ckpt_path.name}")
-    
-    model = LitSegger.load_from_checkpoint(ckpt_path)
-    model.to(device)
-    model.eval()
-    
-    # 3. Data Module
-    dm = SeggerDataModule(
-        data_dir=dataset_dir,
-        batch_size=1,
-        num_workers=0 
-    )
-    dm.setup()
-    
-    all_assignments = []
-    loaders = [dm.train_dataloader(), dm.val_dataloader(), dm.test_dataloader()]
-    
-    print("    Running inference on tiles...")
-    try:
-        from segger.prediction import torch_predict
-    except ImportError:
-        print("    Warning: Could not import segger.prediction (likely due to missing cupy). Prediction skipped.")
-        return
-
-    for loader in loaders:
-        for batch in tqdm(loader, leave=False):
-            batch = batch.to(device)
-            # CALL LIBRARY FUNCTION
-            df = torch_predict.predict_batch(model.model, batch, score_cut=0.5, use_cc=True)
-            all_assignments.append(df)
-            
-    if not all_assignments:
-        print("    No assignments generated.")
-        return
-
-    full_df = pd.concat(all_assignments, ignore_index=True)
-    full_df = full_df.sort_values(["bound", "score"], ascending=[False, False])
-    full_df = full_df.drop_duplicates(subset="transcript_id", keep="first")
-    
-    transcripts_file = raw_input_dir / "transcripts.parquet"
-    if transcripts_file.exists():
-        orig_df = pd.read_parquet(transcripts_file)
-        orig_df["transcript_id"] = orig_df["transcript_id"].astype(str)
-        
-        merged_df = orig_df.merge(full_df, on="transcript_id", how="left")
-        out_file = output_dir / f"{raw_input_dir.name}_segmentation.parquet"
-        merged_df.to_parquet(out_file)
-        print(f"    Saved segmentation to {out_file}")
-        
-        merged_df["cell_id"] = merged_df["segger_cell_id"].fillna("UNASSIGNED")
-        
-        genes_file = raw_input_dir / "genes.parquet"
-        if genes_file.exists():
-            genes_df = pd.read_parquet(genes_file)
-            gene_map = dict(zip(genes_df.gene_id, genes_df.gene_name))
-            merged_df["feature_name"] = merged_df["gene_id"].map(gene_map)
-            merged_df.rename(columns={"x": "x_location", "y": "y_location"}, inplace=True)
-            
-            print("    Creating AnnData...")
-            adata = create_anndata(merged_df, min_transcripts=3)
-            adata_out = output_dir / f"{raw_input_dir.name}_segmentation.h5ad"
-            adata.write_h5ad(adata_out)
-            print(f"    Saved AnnData to {adata_out}")
-
-def create_dataset(input_dir, output_dir, args):
-    print(f"  Creating Dataset from {input_dir}...")
-    
-    # Ensure at least 1 worker for NDTree partitioning
-    workers = args.workers if args.workers > 0 else 1
-    
-    # Initialize sample
-    # Note: weights=None for now (no scRNAseq embeddings used yet)
-    sample = STSampleParquet(
-        base_dir=input_dir,
-        n_workers=workers,
-        sample_type="saw_bin1",
-        weights=None 
-    )
-
-    # Save dataset (Create graph)
-    sample.save(
-        data_dir=output_dir,
-        k_bd=3,
-        dist_bd=15.0,
-        k_tx=3,
-        dist_tx=5.0,
-        tx_graph_mode="grid_same_gene",
-        grid_connectivity=8,
-        within_bin_edges="star",
-        bin_pitch=1.0,
-        allow_missing_boundaries=True, 
-        tile_width=200,
-        tile_height=200,
-        val_prob=0.1,
-        test_prob=0.1,
-        neg_sampling_ratio=5.0,
-        frac=1.0
-    )
-
-def train_sample(dataset_dir, model_dir, raw_input_dir, args):
-    print(f"  Training Model on {dataset_dir}...")
-    
-    dm = SeggerDataModule(
-        data_dir=dataset_dir,
-        batch_size=args.batch_size,
-        num_workers=args.workers
-    )
-    dm.setup()
-    
-    # Determine number of gene tokens
-    num_tx_tokens = 30000 # Default
-    genes_file = raw_input_dir / "genes.parquet"
-    if genes_file.exists():
-        df = pd.read_parquet(genes_file)
-        num_tx_tokens = len(df) + 10 # Buffer
-        print(f"  Detected {len(df)} genes. Setting num_tx_tokens={num_tx_tokens}")
-
-    # Inspect data for feature dims
-    sample_data = dm.train[0]
-    
-    if "tx" in sample_data.x_dict and sample_data.x_dict["tx"].ndim == 1:
-        is_token_based = True
-        num_tx_features = num_tx_tokens
-    else:
-        is_token_based = False
-        num_tx_features = sample_data.x_dict["tx"].shape[1]
-
-    # Handle case where 'bd' might be missing if no boundaries
-    if "bd" in sample_data.x_dict:
-        num_bd_features = sample_data.x_dict["bd"].shape[1]
-    else:
-        num_bd_features = 0 
-        print("  Warning: No boundary features found.")
-
-    model = LitSegger(
-        is_token_based=is_token_based,
-        num_node_features={"tx": num_tx_features, "bd": num_bd_features},
-        init_emb=8,
-        hidden_channels=32,
-        out_channels=8,
-        heads=2,
-        num_mid_layers=2,
-        aggr="sum",
-        learning_rate=1e-3
-    )
-
-    acc = "cpu"
-    if torch.cuda.is_available():
-        acc = "cuda"
-    elif torch.backends.mps.is_available():
-        acc = "mps"
-    
-    print(f"  Using accelerator: {acc}")
-
-    trainer = Trainer(
-        accelerator=acc,
-        devices=1,
-        max_epochs=args.epochs,
-        default_root_dir=model_dir,
-        logger=CSVLogger(model_dir),
-    )
-    
-    trainer.fit(model=model, datamodule=dm)
+# ... functions ...
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--inputs-dir", default="segger_inputs")
-    parser.add_argument("--datasets-dir", default="segger_datasets")
-    parser.add_argument("--models-dir", default="segger_models")
+    parser.add_argument("--inputs-dir", default="../data/processed/segger_data/segger_inputs")
+    parser.add_argument("--datasets-dir", default="../data/processed/segger_data/segger_datasets")
+    parser.add_argument("--models-dir", default="../data/processed/segger_data/segger_models")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--workers", type=int, default=0) # Default to 0 to avoid OOM

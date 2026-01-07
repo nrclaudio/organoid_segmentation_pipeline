@@ -4,36 +4,40 @@
 import glob
 import os
 
+# Updated paths for reorganized project
+KIDNEY_DIR = "../data/processed/kidneys"
+INPUTS_DIR = "../data/processed/segger_data/segger_inputs"
+MODELS_DIR = "../data/processed/segger_data/segger_models"
+
 # 1. Discover Kidneys
-# Expects 'kidneys/' directory to be populated by 'process_all_chips.py'
-KIDNEY_ZARRS = glob.glob("kidneys/*.sdata.zarr")
+KIDNEY_ZARRS = glob.glob(f"{KIDNEY_DIR}/*.sdata.zarr")
 KIDNEY_IDS = [os.path.basename(k).replace(".sdata.zarr", "") for k in KIDNEY_ZARRS]
 
 if not KIDNEY_IDS:
-    print("Warning: No kidneys found in 'kidneys/'. Run 'process_all_chips.py' first.")
+    print(f"Warning: No kidneys found in '{KIDNEY_DIR}'. Run 'process_all_chips.py' first.")
 
 rule all:
     input:
-        expand("segger_models/{kidney}", kidney=KIDNEY_IDS)
+        expand(f"{MODELS_DIR}/{{kidney}}", kidney=KIDNEY_IDS)
 
 # 2. Prepare Segger Inputs (Parallelizable)
 rule prepare_inputs:
     input:
-        "kidneys/{kidney}.sdata.zarr"
+        f"{KIDNEY_DIR}/{{kidney}}.sdata.zarr"
     output:
-        "segger_inputs/{kidney}/transcripts.parquet",
-        "segger_inputs/{kidney}/boundaries.parquet",
-        "segger_inputs/{kidney}/genes.parquet"
+        f"{INPUTS_DIR}/{{kidney}}/transcripts.parquet",
+        f"{INPUTS_DIR}/{{kidney}}/boundaries.parquet",
+        f"{INPUTS_DIR}/{{kidney}}/genes.parquet"
     params:
-        out_dir = "segger_inputs"
+        out_dir = INPUTS_DIR
     shell:
         "python prepare_segger_inputs.py --input-file {input} --out-dir {params.out_dir}"
 
 # 3. Train Model (Parallelizable)
 rule train_model:
     input:
-        "segger_inputs/{kidney}/transcripts.parquet"
+        f"{INPUTS_DIR}/{{kidney}}/transcripts.parquet"
     output:
-        directory("segger_models/{kidney}")
+        directory(f"{MODELS_DIR}/{{kidney}}")
     shell:
         "python run_segger_pipeline.py --sample {wildcards.kidney}"
