@@ -24,7 +24,7 @@ conda activate segger_env  # <--- CHANGE THIS to your actual environment name
 
 # 2. Setup Paths
 # Navigate to the script's directory
-cd $(dirname "$0")
+# cd $(dirname "$0")
 
 # Create logs directory
 mkdir -p logs
