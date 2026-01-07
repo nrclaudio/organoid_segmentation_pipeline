@@ -35,8 +35,11 @@ try:
     from pytorch_lightning import Trainer
     from pytorch_lightning.loggers import CSVLogger
     from segger.data.utils import create_anndata
-    from segger.prediction import torch_predict # Use library implementation
+    # from segger.prediction import torch_predict # Moved to predict_sample
+
 except ImportError as e:
+    import traceback
+    traceback.print_exc()
     print(f"Error importing Segger modules: {e}")
     print("Please ensure you are running this script within the 'segger_mac' environment.")
     sys.exit(1)
@@ -77,6 +80,12 @@ def predict_sample(dataset_dir, model_dir, output_dir, raw_input_dir, args):
     loaders = [dm.train_dataloader(), dm.val_dataloader(), dm.test_dataloader()]
     
     print("    Running inference on tiles...")
+    try:
+        from segger.prediction import torch_predict
+    except ImportError:
+        print("    Warning: Could not import segger.prediction (likely due to missing cupy). Prediction skipped.")
+        return
+
     for loader in loaders:
         for batch in tqdm(loader, leave=False):
             batch = batch.to(device)
@@ -269,48 +278,25 @@ def main():
                 traceback.print_exc()
                 continue
             
-                # 2. Train
+        # 2. Train
+        if (m_out / "lightning_logs").exists():
+            print("  Model logs exist, skipping training (delete to retrain).")
+        else:
+            try:
+                train_sample(d_out, m_out, sample_dir, args)
+            except Exception as e:
+                print(f"  Failed to train: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
             
-                if (m_out / "lightning_logs").exists():
-            
-                     print("  Model logs exist, skipping training (delete to retrain).")
-            
-                else:
-            
-                     try:
-            
-                         train_sample(d_out, m_out, sample_dir, args)
-            
-                     except Exception as e:
-            
-                         print(f"  Failed to train: {e}")
-            
-                         import traceback
-            
-                         traceback.print_exc()
-            
-                         continue
-            
-        
-            
-                # 3. Predict
-            
-                try:
-            
-                    predict_sample(d_out, m_out, m_out, sample_dir, args)
-            
-                except Exception as e:
-            
-                    print(f"  Failed to predict: {e}")
-            
-                    import traceback
-            
-                    traceback.print_exc()
-            
-        
-            
-        if __name__ == "__main__":
-            
-            main()
-            
-        
+        # 3. Predict
+        try:
+            predict_sample(d_out, m_out, m_out, sample_dir, args)
+        except Exception as e:
+            print(f"  Failed to predict: {e}")
+            import traceback
+            traceback.print_exc()
+
+if __name__ == "__main__":
+    main()
