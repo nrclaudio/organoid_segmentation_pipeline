@@ -27,7 +27,7 @@ if str(SEGGER_SRC) not in sys.path:
     sys.path.insert(0, str(SEGGER_SRC))
 
 try:
-    from segger.data.io import XeniumSample
+    from segger.data.parquet.sample import STSampleParquet
     from segger.training.train import LitSegger
     from segger.training.segger_data_module import SeggerDataModule
     from segger.prediction.predict_parquet import segment, load_model
@@ -36,26 +36,36 @@ except ImportError as e:
     sys.exit(1)
 
 def create_dataset(sample_dir, d_out, args):
-    """Create a Segger-compatible dataset from parquets."""
+    """Create a Segger-compatible dataset from parquets using STSampleParquet."""
     print(f"  Creating dataset in {d_out}...")
-    xs = XeniumSample(verbose=True)
-    xs.set_file_paths(
-        transcripts_path=sample_dir / "transcripts.parquet",
-        boundaries_path=sample_dir / "boundaries.parquet",
-    )
-    xs.set_metadata()
     
-    # Save dataset with standard tile sizes
-    xs.save_dataset_for_segger(
-        processed_dir=d_out,
-        x_size=220,
-        y_size=220,
-        d_x=200,
-        d_y=200,
-        margin_x=10,
-        margin_y=10,
-        compute_labels=True,
-        num_workers=args.workers if args.workers > 0 else 1
+    workers = args.workers if args.workers > 0 else 1
+    
+    # Initialize sample specifically for SAW data
+    sample = STSampleParquet(
+        base_dir=sample_dir,
+        n_workers=workers,
+        sample_type="saw_bin1"
+    )
+
+    # Save dataset (Create graph tiles)
+    sample.save(
+        data_dir=d_out,
+        k_bd=3,
+        dist_bd=15.0,
+        k_tx=3,
+        dist_tx=5.0,
+        tx_graph_mode="grid_same_gene",
+        grid_connectivity=8,
+        within_bin_edges="star",
+        bin_pitch=1.0,
+        allow_missing_boundaries=True, 
+        tile_width=200,
+        tile_height=200,
+        val_prob=0.1,
+        test_prob=0.1,
+        neg_sampling_ratio=5.0,
+        frac=1.0
     )
 
 def train_sample(d_out, m_out, sample_dir, args):
