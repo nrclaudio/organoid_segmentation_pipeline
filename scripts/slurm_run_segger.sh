@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
 #SBATCH --partition=gpu
-#SBATCH --array=0-23  # ADJUST THIS: 0 to (Number_of_Samples - 1)
+#SBATCH --array=0-20  # 21 Samples found in data/processed/segger_data/segger_inputs
 
 # ==============================================================================
 # Run Segger Pipeline on HPC
@@ -20,18 +20,19 @@ module purge || true
 
 # Initialize Conda
 source $(conda info --base)/etc/profile.d/conda.sh
-conda activate segger_env  # <--- CHANGE THIS to your actual environment name
+conda activate segger_env  # <--- VERIFY THIS environment name on your server
 
 # 2. Setup Paths
-# Navigate to the script's directory
-# cd $(dirname "$0")
+# Navigate to the pipeline directory if not already there
+# cd $(dirname "$0")/..
 
 # Create logs directory
 mkdir -p logs
 
 # 3. Identify Sample
-# List all subdirectories in segger_inputs/ to get sample names
-SAMPLES=($(ls -d segger_inputs/*/ | xargs -n 1 basename | sort))
+# List all subdirectories in the correct inputs directory
+INPUTS_DIR="../data/processed/segger_data/segger_inputs"
+SAMPLES=($(ls -d $INPUTS_DIR/*/ | xargs -n 1 basename | sort))
 NUM_SAMPLES=${#SAMPLES[@]}
 
 # Get current sample based on Array Task ID
@@ -41,7 +42,7 @@ SAMPLE_IDX=$SLURM_ARRAY_TASK_ID
 if [ "$SAMPLE_IDX" -ge "$NUM_SAMPLES" ]; then
     echo "Error: Array index $SAMPLE_IDX exceeds number of samples ($NUM_SAMPLES)."
     exit 1
-fi
+}
 
 SAMPLE=${SAMPLES[$SAMPLE_IDX]}
 
@@ -56,11 +57,10 @@ echo "=================================================="
 # 4. Run Pipeline
 # Note: We set --workers 4 to utilize the requested CPUs. 
 # If you encounter OOM errors, reduce workers to 0.
-# We are in pipeline/ or root? Usually submitted from pipeline/
 python src/run_segger_pipeline.py \
-    --inputs-dir segger_inputs \
-    --datasets-dir segger_datasets \
-    --models-dir segger_models \
+    --inputs-dir ../data/processed/segger_data/segger_inputs \
+    --datasets-dir ../data/processed/segger_data/segger_datasets \
+    --models-dir ../data/processed/segger_data/segger_models \
     --sample "$SAMPLE" \
     --workers 4 \
     --epochs 10
