@@ -56,7 +56,8 @@ echo "=================================================="
 # 4. Run Pipeline
 # Note: We set --workers 4 to utilize the requested CPUs. 
 # If you encounter OOM errors, reduce workers to 0.
-python run_segger_pipeline.py \
+# We are in pipeline/ or root? Usually submitted from pipeline/
+python src/run_segger_pipeline.py \
     --inputs-dir segger_inputs \
     --datasets-dir segger_datasets \
     --models-dir segger_models \

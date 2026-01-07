@@ -6,8 +6,9 @@ import argparse
 
 # Update paths for reorganized project
 SEGMENTATION_DIR = Path(__file__).resolve().parent
-DATA_ROOT = SEGMENTATION_DIR.parent / "data" / "processed" / "realigned"
-OUTPUT_KIDNEYS = SEGMENTATION_DIR.parent / "data" / "processed" / "kidneys"
+# Script is now in pipeline/src, so parent is pipeline, parent.parent is root.
+DATA_ROOT = SEGMENTATION_DIR.parent.parent / "data" / "processed" / "realigned"
+OUTPUT_KIDNEYS = SEGMENTATION_DIR.parent.parent / "data" / "processed" / "kidneys"
 
 # Use current python environment
 SDATA_PYTHON = sys.executable

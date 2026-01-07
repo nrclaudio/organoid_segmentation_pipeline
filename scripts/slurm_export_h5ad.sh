@@ -28,8 +28,16 @@ conda activate stereo38
 DATA_ROOT="/exports/nieromics-hpc/cnovellarausell/organoid_tx_realigned_files"
 
 # Path to the python conversion script (sto_export_h5ad.py)
-# This script should be in the same repo as this file
-CONVERT_SCRIPT="/exports/nieromics-hpc/cnovellarausell/organoid_tx/preprocessing/sto_export_h5ad.py"
+# Assuming this script is run from project root or similar, but better to be explicit or relative
+# We assume the user submits this from the pipeline/scripts folder or root
+SCRIPT_DIR=$(dirname "$0")
+PROJECT_ROOT=$(readlink -f "$SCRIPT_DIR/../..")
+CONVERT_SCRIPT="$PROJECT_ROOT/pipeline/src/sto_export_h5ad.py"
+
+if [[ ! -f "$CONVERT_SCRIPT" ]]; then
+    # Fallback to hardcoded path if relative fails (HPC specific)
+    CONVERT_SCRIPT="/exports/nieromics-hpc/cnovellarausell/organoid_tx/pipeline/src/sto_export_h5ad.py"
+fi
 
 cd "$DATA_ROOT"
 

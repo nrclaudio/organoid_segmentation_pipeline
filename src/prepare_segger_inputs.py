@@ -11,7 +11,8 @@ from scipy.ndimage import label
 
 # Adjust path to find segger if not installed
 # Reorganization: segger is now in tools/segger
-SEGGER_REPO = Path(__file__).resolve().parent.parent / "tools" / "segger"
+# Script in pipeline/src -> parent=pipeline -> parent.parent=root -> tools/segger
+SEGGER_REPO = Path(__file__).resolve().parent.parent.parent / "tools" / "segger"
 
 SEGGER_SRC = SEGGER_REPO / "src"
 

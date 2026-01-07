@@ -31,7 +31,7 @@ rule prepare_inputs:
     params:
         out_dir = INPUTS_DIR
     shell:
-        "python prepare_segger_inputs.py --input-file {input} --out-dir {params.out_dir}"
+        "python src/prepare_segger_inputs.py --input-file {input} --out-dir {params.out_dir}"
 
 # 3. Train Model (Parallelizable)
 rule train_model:
@@ -40,4 +40,4 @@ rule train_model:
     output:
         directory(f"{MODELS_DIR}/{{kidney}}")
     shell:
-        "python run_segger_pipeline.py --sample {wildcards.kidney}"
+        "python src/run_segger_pipeline.py --sample {wildcards.kidney}"
