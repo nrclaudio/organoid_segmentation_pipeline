@@ -3,7 +3,7 @@ from pathlib import Path
 
 def check_tile(filepath):
     try:
-        data = torch.load(filepath)
+        data = torch.load(filepath, weights_only=False)
     except Exception as e:
         return f"Error: {e}"
 
