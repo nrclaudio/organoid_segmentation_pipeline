@@ -64,6 +64,25 @@ sbatch scripts/slurm_export_h5ad.sh
 ```
 
 ## Requirements
+
 - Python 3.10+
+
 - [SpatialData](https://spatialdata.scverse.org/)
+
 - [Segger](https://github.com/nrclaudio/stereosegger) (must be placed in `tools/segger` relative to the project root)
+
+
+
+## Server Setup (GPU Acceleration)
+
+To run the segmentation pipeline with GPU support, you must install the correct version of `cupy` matching your server's CUDA toolkit.
+
+
+
+1. **Check CUDA version:** `nvidia-smi` or `nvcc --version`
+
+2. **Install cupy:**
+
+   - For CUDA 12.x: `pip install cupy-cuda12x`
+
+   - For CUDA 11.x: `pip install cupy-cuda11x`
