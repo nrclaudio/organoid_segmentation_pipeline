@@ -30,113 +30,10 @@ try:
     from segger.data.io import XeniumSample
     from segger.training.train import LitSegger
     from segger.training.segger_data_module import SeggerDataModule
-    from segger.data.utils import get_edge_index, create_anndata, coo_to_dense_adj
+    from segger.prediction.predict_parquet import segment, load_model
 except ImportError as e:
     print(f"Error importing Segger modules: {e}")
     sys.exit(1)
-
-def get_similarity_scores(model, batch, from_type, to_type, k_to, dist_to):
-    # Compute similarity scores on best available device
-    device = batch[from_type].x.device
-    shape = batch[from_type].x.shape[0], batch[to_type].x.shape[0]
-    
-    # Compute edge indices (CPU KDTree)
-    if from_type == to_type:
-        coords_1 = coords_2 = batch[to_type].pos
-    else:
-        coords_1 = batch[to_type].pos[:, :2]
-        coords_2 = batch[from_type].pos[:, :2]
-        
-    edge_index = get_edge_index(
-        coords_1.cpu(),
-        coords_2.cpu(),
-        k=k_to,
-        dist=dist_to,
-        method="kd_tree"
-    ).to(device)
-    
-    # Convert to dense adjacency
-    edge_index = coo_to_dense_adj(edge_index.T, num_nodes=shape[0], num_nbrs=k_to)
-    
-    model.eval()
-    with torch.no_grad():
-        embeddings = model(batch.x_dict, batch.edge_index_dict)
-    
-    emb_to = embeddings[to_type]
-    emb_from = embeddings[from_type]
-    
-    # Handle padding (-1)
-    mask = edge_index != -1
-    flat_indices = edge_index[mask]
-    
-    # Gather 'from' embeddings
-    gathered_from = emb_from[flat_indices]
-    
-    # Repeat 'to' embeddings
-    row_indices = torch.arange(shape[0], device=device).unsqueeze(1).expand_as(edge_index)
-    flat_rows = row_indices[mask]
-    gathered_to = emb_to[flat_rows]
-    
-    # Compute dot product and sigmoid on device
-    similarity = (gathered_to * gathered_from).sum(dim=1)
-    similarity = torch.sigmoid(similarity)
-    
-    # Move back to CPU for SciPy sparse matrix
-    values = similarity.cpu().numpy()
-    rows = flat_rows.cpu().numpy()
-    cols = flat_indices.cpu().numpy()
-    
-    return coo_matrix((values, (rows, cols)), shape=shape)
-
-def predict_batch_local(model, batch, score_cut=0.5, use_cc=True):
-    # Device-agnostic version of predict_batch using only Torch/SciPy
-    transcript_id = batch["tx"].id.cpu().numpy().astype(str)
-    assignments = pd.DataFrame({"transcript_id": transcript_id})
-    assignments["score"] = 0.0
-    assignments["segger_cell_id"] = None
-    assignments["bound"] = 0
-    
-    if len(batch["bd"].pos) < 10:
-        return assignments
-
-    # tx -> bd (expansion)
-    scores = get_similarity_scores(model, batch, "tx", "bd", k_to=4, dist_to=15.0)
-    dense_scores = scores.toarray()
-    
-    if dense_scores.shape[1] == 0:
-        return assignments
-
-    max_scores = dense_scores.max(axis=1)
-    assignments["score"] = max_scores
-    
-    mask = max_scores > score_cut
-    
-    # Concatenate boundary IDs
-    all_ids = np.concatenate(batch["bd"].id.cpu().numpy())
-    max_indices = dense_scores.argmax(axis=1)
-    
-    assignments.loc[mask, "segger_cell_id"] = all_ids[max_indices[mask]]
-    assignments.loc[mask, "bound"] = 1
-    
-    # tx -> tx (floating cells)
-    if use_cc:
-        unassigned_mask = assignments["segger_cell_id"].isna()
-        if unassigned_mask.any():
-            scores_tx = get_similarity_scores(model, batch, "tx", "tx", k_to=5, dist_to=5.0)
-            dense_tx = scores_tx.toarray()
-            
-            sub_matrix = dense_tx[unassigned_mask][:, unassigned_mask]
-            sub_matrix[sub_matrix < score_cut] = 0
-            
-            n_comps, labels = connected_components(sub_matrix, connection='weak', directed=False)
-            
-            def _get_id():
-                return "".join(np.random.choice(list("abcdefghijklmnopqrstuvwxyz"), 8)) + "-nx"
-            
-            new_ids = np.array([_get_id() for _ in range(n_comps)])
-            assignments.loc[unassigned_mask, "segger_cell_id"] = new_ids[labels]
-            
-    return assignments
 
 def create_dataset(sample_dir, d_out, args):
     """Create a Segger-compatible dataset from parquets."""
@@ -198,15 +95,11 @@ def train_sample(d_out, m_out, sample_dir, args):
     trainer.fit(model=ls, datamodule=dm)
 
 def predict_sample(d_out, m_out, results_dir, sample_dir, args):
-    """Run prediction using the trained model (Local implementation, no CuPy)."""
-    print(f"  Running prediction...")
+    """Run prediction using the official Segger library function."""
+    print(f"  Running prediction using Segger library...")
     
     # Detect Device
-    device = "cpu"
-    if torch.cuda.is_available():
-        device = "cuda"
-    elif torch.backends.mps.is_available():
-        device = "mps"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"    Using device for inference: {device}")
 
     # Load the best/latest checkpoint
@@ -218,14 +111,7 @@ def predict_sample(d_out, m_out, results_dir, sample_dir, args):
         else:
             raise FileNotFoundError(f"No checkpoints found in {m_out}")
 
-    ckpts = glob.glob(str(ckpt_dir / "*.ckpt"))
-    if not ckpts:
-        raise FileNotFoundError(f"No .ckpt files found in {ckpt_dir}")
-    ckpt_path = sorted(ckpts, key=os.path.getmtime)[-1]
-    
-    model = LitSegger.load_from_checkpoint(ckpt_path)
-    model.to(device)
-    model.eval()
+    model = load_model(ckpt_dir)
     
     dm = SeggerDataModule(
         data_dir=d_out,
@@ -234,52 +120,23 @@ def predict_sample(d_out, m_out, results_dir, sample_dir, args):
     )
     dm.setup()
 
-    all_assignments = []
-    loaders = [dm.train_dataloader(), dm.val_dataloader(), dm.test_dataloader()]
-    
-    for loader in loaders:
-        for batch in tqdm(loader, leave=False):
-            batch = batch.to(device)
-            df = predict_batch_local(model.model, batch, score_cut=0.1, use_cc=True)
-            all_assignments.append(df)
-            
-    if not all_assignments:
-        print("    No assignments generated.")
-        return
+    receptive_field = {"k_bd": 4, "dist_bd": 15, "k_tx": 5, "dist_tx": 3}
 
-    full_df = pd.concat(all_assignments, ignore_index=True)
-    full_df = full_df.sort_values(["bound", "score"], ascending=[False, False])
-    full_df = full_df.drop_duplicates(subset="transcript_id", keep="first")
-    
-    # Merge with original transcripts
-    transcripts_file = sample_dir / "transcripts.parquet"
-    if transcripts_file.exists():
-        orig_df = pd.read_parquet(transcripts_file)
-        orig_df["transcript_id"] = orig_df["transcript_id"].astype(str)
-        
-        merged_df = orig_df.merge(full_df, on="transcript_id", how="left")
-        
-        # Save results
-        out_file = results_dir / f"{sample_dir.name}_segmentation.parquet"
-        merged_df.to_parquet(out_file)
-        print(f"    Saved segmentation to {out_file}")
-        
-        # Create AnnData
-        merged_df["cell_id"] = merged_df["segger_cell_id"].fillna("UNASSIGNED")
-        
-        # Look for genes mapping
-        genes_file = sample_dir / "genes.parquet"
-        if genes_file.exists():
-            genes_df = pd.read_parquet(genes_file)
-            gene_map = dict(zip(genes_df.gene_id, genes_df.gene_name))
-            merged_df["feature_name"] = merged_df["gene_id"].map(gene_map)
-            merged_df.rename(columns={"x": "x_location", "y": "y_location"}, inplace=True)
-            
-            print("    Creating AnnData...")
-            adata = create_anndata(merged_df, min_transcripts=3)
-            adata_out = results_dir / f"{sample_dir.name}_segmentation.h5ad"
-            adata.write_h5ad(adata_out)
-            print(f"    Saved AnnData to {adata_out}")
+    segment(
+        model,
+        dm,
+        save_dir=results_dir,
+        seg_tag=sample_dir.name,
+        transcript_file=sample_dir / "transcripts.parquet",
+        receptive_field=receptive_field,
+        min_transcripts=5,
+        score_cut=0.1,
+        cell_id_col="segger_cell_id",
+        use_cc=True,
+        knn_method="kd_tree",
+        verbose=True,
+        gpu_ids=["0"] if torch.cuda.is_available() else None,
+    )
 
 def main():
     parser = argparse.ArgumentParser()
