@@ -78,19 +78,31 @@ def train_sample(d_out, m_out, sample_dir, args):
     )
     dm.setup()
 
-    # Define GNN metadata
-    metadata = (["tx", "bd"], [("tx", "belongs", "bd"), ("tx", "neighbors", "tx")])
+    # Inspect data to get correct feature dimensions
+    sample_data = dm.train[0]
     
-    # Initialize model
+    # For transcripts: if token-based (2D with [token, count] or 1D tokens)
+    # We need the max token ID + 1
+    if sample_data['tx'].x.ndim == 2:
+        num_tx_features = int(sample_data['tx'].x[:, 0].max().item() + 1)
+    else:
+        num_tx_features = int(sample_data['tx'].x.max().item() + 1)
+        
+    # For boundaries: number of columns in .x
+    num_bd_features = sample_data['bd'].x.shape[1]
+    
+    print(f"  Detected features: tx={num_tx_features}, bd={num_bd_features}")
+
+    # Initialize model with exact expected kwargs
     ls = LitSegger(
-        num_tx_tokens=10000, 
+        is_token_based=1, # True
+        num_node_features={'tx': num_tx_features, 'bd': num_bd_features},
         init_emb=8,
         hidden_channels=64,
         out_channels=16,
         heads=4,
         num_mid_layers=1,
-        aggr="sum",
-        metadata=metadata,
+        aggr="sum"
     )
 
     trainer = Trainer(
