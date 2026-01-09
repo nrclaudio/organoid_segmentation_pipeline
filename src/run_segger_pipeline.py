@@ -91,7 +91,7 @@ def get_similarity_scores_cpu(model, batch, from_type, to_type, k_to, dist_to):
     
     return coo_matrix((values, (rows, cols)), shape=shape)
 
-def predict_batch_cpu(model, batch, score_cut=0.5, use_cc=True):
+def predict_batch_cpu(model, batch, score_cut=0.5, use_cc=False):
     # CPU version of predict_batch
     transcript_id = batch["tx"].id.numpy().astype(str)
     assignments = pd.DataFrame({"transcript_id": transcript_id})
@@ -187,7 +187,7 @@ def predict_sample(dataset_dir, model_dir, output_dir, raw_input_dir, args):
         for batch in tqdm(loader, leave=False):
             batch = batch.to(device)
             # CALL LIBRARY FUNCTION
-            df = torch_predict.predict_batch(model.model, batch, score_cut=0.5, use_cc=True)
+            df = torch_predict.predict_batch(model.model, batch, score_cut=0.5, use_cc=False)
             all_assignments.append(df)
             
     if not all_assignments:
