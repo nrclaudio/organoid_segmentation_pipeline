@@ -19,127 +19,30 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, message="divide by ze
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in oriented_envelope")
 
 # Ensure segger is importable
-# Reorganization: segger is now in tools/segger
-# Script in pipeline/src -> parent=pipeline -> parent.parent=root -> tools/segger
-SEGGER_REPO = Path(__file__).resolve().parent.parent.parent / "tools" / "segger"
+# Reorganization: segger is now in tools/stereosegger
+# Script in pipeline/src -> parent=pipeline -> parent.parent=root -> tools/stereosegger
+SEGGER_REPO = Path(__file__).resolve().parent.parent.parent / "tools" / "stereosegger"
 
 SEGGER_SRC = SEGGER_REPO / "src"
 if str(SEGGER_SRC) not in sys.path:
     sys.path.insert(0, str(SEGGER_SRC))
 
 try:
-    from segger.data.parquet.sample import STSampleParquet
-    from segger.training.train import LitSegger
-    from segger.training.segger_data_module import SeggerDataModule
+    from stereosegger.data.parquet.sample import STSampleParquet
+    from stereosegger.training.train import LitSegger
+    from stereosegger.training.segger_data_module import SeggerDataModule
     from pytorch_lightning import Trainer
     from pytorch_lightning.loggers import CSVLogger
-    from segger.data.utils import get_edge_index, create_anndata, coo_to_dense_adj
+    from stereosegger.data.utils import get_edge_index, create_anndata, coo_to_dense_adj
+    # Import the GPU-accelerated predict_batch
+    from stereosegger.prediction import predict_batch
 except ImportError as e:
     import traceback
     traceback.print_exc()
     print(f"Error importing Segger modules: {e}")
     sys.exit(1)
 
-def get_similarity_scores_cpu(model, batch, from_type, to_type, k_to, dist_to):
-    # Compute similarity scores on CPU
-    shape = batch[from_type].x.shape[0], batch[to_type].x.shape[0]
-    
-    # Compute edge indices (CPU KDTree)
-    if from_type == to_type:
-        coords_1 = coords_2 = batch[to_type].pos
-    else:
-        coords_1 = batch[to_type].pos[:, :2]
-        coords_2 = batch[from_type].pos[:, :2]
-        
-    edge_index = get_edge_index(
-        coords_1,
-        coords_2,
-        k=k_to,
-        dist=dist_to,
-        method="kd_tree"
-    )
-    
-    # Convert to dense adjacency (CPU)
-    edge_index = coo_to_dense_adj(edge_index.T, num_nodes=shape[0], num_nbrs=k_to)
-    
-    model.eval()
-    with torch.no_grad():
-        embeddings = model(batch.x_dict, batch.edge_index_dict)
-    
-    emb_to = embeddings[to_type]
-    emb_from = embeddings[from_type]
-    
-    # Handle padding (-1)
-    mask = edge_index != -1
-    flat_indices = edge_index[mask]
-    
-    # Gather 'from' embeddings for valid neighbors
-    gathered_from = emb_from[flat_indices]
-    
-    # Repeat 'to' embeddings for valid neighbors
-    row_indices = torch.arange(shape[0], device=edge_index.device).unsqueeze(1).expand_as(edge_index)
-    flat_rows = row_indices[mask]
-    gathered_to = emb_to[flat_rows]
-    
-    # Compute dot product
-    similarity = (gathered_to * gathered_from).sum(dim=1)
-    similarity = torch.sigmoid(similarity)
-    
-    values = similarity.numpy()
-    rows = flat_rows.numpy()
-    cols = flat_indices.numpy()
-    
-    return coo_matrix((values, (rows, cols)), shape=shape)
-
-def predict_batch_cpu(model, batch, score_cut=0.5, use_cc=False):
-    # CPU version of predict_batch
-    transcript_id = batch["tx"].id.numpy().astype(str)
-    assignments = pd.DataFrame({"transcript_id": transcript_id})
-    assignments["score"] = 0.0
-    assignments["segger_cell_id"] = None
-    assignments["bound"] = 0
-    
-    if len(batch["bd"].pos) < 10:
-        return assignments
-
-    # tx -> bd
-    scores = get_similarity_scores_cpu(model, batch, "tx", "bd", k_to=4, dist_to=12.0)
-    dense_scores = scores.toarray()
-    
-    if dense_scores.shape[1] == 0:
-        return assignments
-
-    max_scores = dense_scores.max(axis=1)
-    assignments["score"] = max_scores
-    
-    mask = max_scores > score_cut
-    
-    all_ids = np.concatenate(batch["bd"].id)
-    max_indices = dense_scores.argmax(axis=1)
-    
-    assignments.loc[mask, "segger_cell_id"] = all_ids[max_indices[mask]]
-    assignments.loc[mask, "bound"] = 1
-    
-    # Refine unassigned using connected components (tx -> tx)
-    if use_cc:
-        unassigned_mask = assignments["segger_cell_id"].isna()
-        if unassigned_mask.any():
-            scores_tx = get_similarity_scores_cpu(model, batch, "tx", "tx", k_to=5, dist_to=5.0)
-            dense_tx = scores_tx.toarray()
-            
-            sub_matrix = dense_tx[unassigned_mask][:, unassigned_mask]
-            sub_matrix[sub_matrix < score_cut] = 0
-            
-            n_comps, labels = connected_components(sub_matrix, connection='weak', directed=False)
-            
-            def _get_id():
-                return "".join(np.random.choice(list("abcdefghijklmnopqrstuvwxyz"), 8)) + "-nx"
-            
-            new_ids = np.array([_get_id() for _ in range(n_comps)])
-            
-            assignments.loc[unassigned_mask, "segger_cell_id"] = new_ids[labels]
-            
-    return assignments
+# ... (keep helper functions like get_similarity_scores_cpu if you want, or delete them later)
 
 def predict_sample(dataset_dir, model_dir, output_dir, raw_input_dir, args):
     print(f"  Predicting on {dataset_dir}...")
@@ -176,18 +79,14 @@ def predict_sample(dataset_dir, model_dir, output_dir, raw_input_dir, args):
     all_assignments = []
     loaders = [dm.train_dataloader(), dm.val_dataloader(), dm.test_dataloader()]
     
-    print("    Running inference on tiles...")
-    try:
-        from segger.prediction import torch_predict
-    except ImportError:
-        print("    Warning: Could not import segger.prediction (likely due to missing cupy). Prediction skipped.")
-        return
+    print("    Running inference on tiles (GPU)...")
 
     for loader in loaders:
         for batch in tqdm(loader, leave=False):
             batch = batch.to(device)
-            # CALL LIBRARY FUNCTION
-            df = torch_predict.predict_batch(model.model, batch, score_cut=0.5, use_cc=False)
+            # CALL LIBRARY FUNCTION (GPU)
+            # Note: predict_batch returns a DataFrame
+            df = predict_batch(model.model, batch, score_cut=0.5, use_cc=False)
             all_assignments.append(df)
             
     if not all_assignments:

@@ -15,10 +15,15 @@
 
 # 1. Environment Setup
 module purge || true
-echo "cuda"
-module add library/cuda/12.2.2/gcc.8.5.0
-echo "cudnn"
-module add library/cudnn/12.2/cudnn
+
+# NOTE: We DO NOT load system CUDA/cuDNN modules here because they are 
+# version 12.2, which conflicts with the CUDA 12.4 libraries installed 
+# via pip in the segger_env. The pip packages include the necessary runtimes.
+# echo "cuda"
+# module add library/cuda/12.2.2/gcc.8.5.0
+# echo "cudnn"
+# module add library/cudnn/12.2/cudnn
+
 echo "conda"
 module add tools/miniconda/python3.8/4.9.2
 
@@ -26,9 +31,15 @@ hostname
 echo "Cuda devices: $CUDA_VISIBLE_DEVICES"
 nvidia-smi
 
-# Initialize Conda (using the module-provided conda)
+# Initialize Conda
 source $(conda info --base)/etc/profile.d/conda.sh
 conda activate segger_env
+
+# Debug: Print where libraries are being picked from if issues persist
+# export LD_DEBUG=libs 
+echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+python -c "import torch; print(f'Torch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}')"
+
 
 # 2. Setup Paths
 # Navigate to the pipeline directory if not already there
@@ -70,7 +81,7 @@ python src/run_segger_pipeline.py \
     --datasets-dir ../data/processed/segger_data/segger_datasets \
     --models-dir ../data/processed/segger_data/segger_models \
     --sample "$SAMPLE" \
-    --workers 4 \
+    --workers 0 \
     --epochs 10
 
 echo "Job finished for $SAMPLE"
