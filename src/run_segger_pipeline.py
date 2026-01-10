@@ -225,7 +225,7 @@ def main():
     parser.add_argument("--models-dir", default="../data/processed/segger_data/segger_models")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--workers", type=int, default=0) # Default to 0 to avoid OOM
+    parser.add_argument("--workers", type=int, default=4) # Default to 4
     parser.add_argument("--sample", type=str, help="Specific sample name to process (overrides scanning inputs-dir)")
     args = parser.parse_args()
     
