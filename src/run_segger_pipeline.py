@@ -278,7 +278,11 @@ def train_sample(dataset_dir, model_dir, raw_input_dir, args):
     # Inspect data for feature dims
     sample_data = dm.train[0]
     
-    if "tx" in sample_data.x_dict and sample_data.x_dict["tx"].ndim == 1:
+    # Check if explicitly flagged as token_based in the dataset (handles [idx, count] case)
+    if hasattr(sample_data["tx"], "token_based") and sample_data["tx"].token_based:
+        is_token_based = True
+        num_tx_features = num_tx_tokens
+    elif "tx" in sample_data.x_dict and sample_data.x_dict["tx"].ndim == 1:
         is_token_based = True
         num_tx_features = num_tx_tokens
     else:
