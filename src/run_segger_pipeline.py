@@ -34,8 +34,8 @@ try:
     from pytorch_lightning import Trainer
     from pytorch_lightning.loggers import CSVLogger
     from stereosegger.data.utils import get_edge_index, create_anndata, coo_to_dense_adj
-    # Import the GPU-accelerated predict_batch
-    from stereosegger.prediction import predict_batch
+    # Import the GPU-accelerated segment function
+    from stereosegger.prediction import segment
 except ImportError as e:
     import traceback
     traceback.print_exc()
@@ -76,51 +76,50 @@ def predict_sample(dataset_dir, model_dir, output_dir, raw_input_dir, args):
     )
     dm.setup()
     
-    all_assignments = []
-    loaders = [dm.train_dataloader(), dm.val_dataloader(), dm.test_dataloader()]
-    
-    print("    Running inference on tiles (GPU)...")
-
-    for loader in loaders:
-        for batch in tqdm(loader, leave=False):
-            batch = batch.to(device)
-            # CALL LIBRARY FUNCTION (GPU)
-            # Note: predict_batch returns a DataFrame
-            df = predict_batch(model.model, batch, score_cut=0.5, use_cc=False)
-            all_assignments.append(df)
-            
-    if not all_assignments:
-        print("    No assignments generated.")
+    transcripts_file = raw_input_dir / "transcripts.parquet"
+    if not transcripts_file.exists():
+        print(f"    Transcripts file not found at {transcripts_file}. Skipping.")
         return
 
-    full_df = pd.concat(all_assignments, ignore_index=True)
-    full_df = full_df.sort_values(["bound", "score"], ascending=[False, False])
-    full_df = full_df.drop_duplicates(subset="transcript_id", keep="first")
-    
-    transcripts_file = raw_input_dir / "transcripts.parquet"
-    if transcripts_file.exists():
-        orig_df = pd.read_parquet(transcripts_file)
-        orig_df["transcript_id"] = orig_df["transcript_id"].astype(str)
+    # Define receptive field matching create_dataset
+    receptive_field = {
+        "k_bd": 3,
+        "dist_bd": 15.0,
+        "k_tx": 3,
+        "dist_tx": 5.0
+    }
+
+    try:
+        # CALL LIBRARY FUNCTION
+        # Using segment() because predict_batch() in the current library version 
+        # writes directly to disk and returns None, which would break the manual loop.
+        # We explicitly pass the Stereo-seq graph parameters to match training/dataset creation.
+        segment(
+            model=model,
+            dm=dm,
+            save_dir=output_dir,
+            seg_tag=raw_input_dir.name,
+            transcript_file=transcripts_file,
+            score_cut=0.5,
+            use_cc=False, # Matches original script
+            save_transcripts=True,
+            save_anndata=True,
+            save_cell_masks=False,
+            receptive_field=receptive_field,
+            # Stereo-seq specific graph parameters (matching create_dataset)
+            tx_graph_mode="grid_same_gene",
+            grid_connectivity=8,
+            within_bin_edges="star",
+            bin_pitch=1.0,
+            verbose=True,
+            gpu_ids=["0"] # Assuming single GPU 0 as per logs
+        )
+        print(f"    Segmentation completed. Results in {output_dir}")
         
-        merged_df = orig_df.merge(full_df, on="transcript_id", how="left")
-        out_file = output_dir / f"{raw_input_dir.name}_segmentation.parquet"
-        merged_df.to_parquet(out_file)
-        print(f"    Saved segmentation to {out_file}")
-        
-        merged_df["cell_id"] = merged_df["segger_cell_id"].fillna("UNASSIGNED")
-        
-        genes_file = raw_input_dir / "genes.parquet"
-        if genes_file.exists():
-            genes_df = pd.read_parquet(genes_file)
-            gene_map = dict(zip(genes_df.gene_id, genes_df.gene_name))
-            merged_df["feature_name"] = merged_df["gene_id"].map(gene_map)
-            merged_df.rename(columns={"x": "x_location", "y": "y_location"}, inplace=True)
-            
-            print("    Creating AnnData...")
-            adata = create_anndata(merged_df, min_transcripts=3)
-            adata_out = output_dir / f"{raw_input_dir.name}_segmentation.h5ad"
-            adata.write_h5ad(adata_out)
-            print(f"    Saved AnnData to {adata_out}")
+    except Exception as e:
+        print(f"    Error during segmentation: {e}")
+        import traceback
+        traceback.print_exc()
 
 def create_dataset(input_dir, output_dir, args):
     print(f"  Creating Dataset from {input_dir}...")
