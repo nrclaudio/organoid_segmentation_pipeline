@@ -172,6 +172,7 @@ def train_sample(dataset_dir, model_dir, raw_input_dir, args):
         num_workers=0 # Force 0 to avoid dataloader hangs/deadlocks
     )
     dm.setup()
+    print(f"  DataModule setup complete. Train tiles: {len(dm.train)}, Val tiles: {len(dm.val)}")
     
     # Determine number of gene tokens
     num_tx_tokens = 30000 # Default
@@ -240,6 +241,11 @@ def main():
     parser.add_argument("--workers", type=int, default=4) # Default to 4
     parser.add_argument("--sample", type=str, help="Specific sample name to process (overrides scanning inputs-dir)")
     args = parser.parse_args()
+
+    print("\n=== Segger Pipeline Configuration ===")
+    for arg, value in vars(args).items():
+        print(f"  {arg}: {value}")
+    print("=====================================\n")
     
     inputs_dir = Path(args.inputs_dir)
     datasets_dir = Path(args.datasets_dir)
