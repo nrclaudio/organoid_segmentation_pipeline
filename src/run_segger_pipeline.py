@@ -215,6 +215,9 @@ def train_sample(dataset_dir, model_dir, raw_input_dir, args):
         max_epochs=args.epochs,
         default_root_dir=model_dir,
         logger=CSVLogger(model_dir),
+        log_every_n_steps=10,        # Log more frequently
+        num_sanity_val_steps=0,      # Disable sanity check to start training immediately
+        enable_checkpointing=True,
     )
     
     trainer.fit(model=model, datamodule=dm)
