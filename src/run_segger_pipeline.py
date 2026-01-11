@@ -72,7 +72,7 @@ def predict_sample(dataset_dir, model_dir, output_dir, raw_input_dir, args):
     dm = SeggerDataModule(
         data_dir=dataset_dir,
         batch_size=1,
-        num_workers=0 
+        num_workers=args.workers
     )
     dm.setup()
     
