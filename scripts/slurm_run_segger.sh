@@ -81,7 +81,7 @@ python src/run_segger_pipeline.py \
     --datasets-dir ../data/processed/segger_data/segger_datasets \
     --models-dir ../data/processed/segger_data/segger_models \
     --sample "$SAMPLE" \
-    --workers 0 \
+    --workers 4 \
     --epochs 10
 
 echo "Job finished for $SAMPLE"
