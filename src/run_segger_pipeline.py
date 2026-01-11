@@ -229,6 +229,7 @@ def train_sample(dataset_dir, model_dir, raw_input_dir, args):
         callbacks=[PrintCallback()], # Add custom print callback
     )
     
+    print("  Starting training...")
     trainer.fit(model=model, datamodule=dm)
 
 def main():
