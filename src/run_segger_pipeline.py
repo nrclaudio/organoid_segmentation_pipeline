@@ -112,6 +112,7 @@ def predict_sample(dataset_dir, model_dir, output_dir, raw_input_dir, args):
             within_bin_edges="star",
             bin_pitch=1.0,
             verbose=True,
+            knn_method="kd_tree",
             gpu_ids=["0"] # Assuming single GPU 0 as per logs
         )
         print(f"    Segmentation completed. Results in {output_dir}")
