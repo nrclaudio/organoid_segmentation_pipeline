@@ -31,7 +31,7 @@ try:
     from stereosegger.data.parquet.sample import STSampleParquet
     from stereosegger.training.train import LitSegger
     from stereosegger.training.segger_data_module import SeggerDataModule
-    from pytorch_lightning import Trainer
+    from pytorch_lightning import Trainer, Callback
     from pytorch_lightning.loggers import CSVLogger
     from stereosegger.data.utils import get_edge_index, create_anndata, coo_to_dense_adj
     # Import the GPU-accelerated segment function
@@ -41,6 +41,13 @@ except ImportError as e:
     traceback.print_exc()
     print(f"Error importing Segger modules: {e}")
     sys.exit(1)
+
+class PrintCallback(Callback):
+    def on_train_epoch_end(self, trainer, pl_module):
+        epoch = trainer.current_epoch
+        metrics = trainer.callback_metrics
+        train_loss = metrics.get("train_loss", float("nan"))
+        print(f"Epoch {epoch}: train_loss={train_loss:.4f}")
 
 # ... (keep helper functions like get_similarity_scores_cpu if you want, or delete them later)
 
@@ -218,6 +225,7 @@ def train_sample(dataset_dir, model_dir, raw_input_dir, args):
         log_every_n_steps=10,        # Log more frequently
         num_sanity_val_steps=0,      # Disable sanity check to start training immediately
         enable_checkpointing=True,
+        callbacks=[PrintCallback()], # Add custom print callback
     )
     
     trainer.fit(model=model, datamodule=dm)
