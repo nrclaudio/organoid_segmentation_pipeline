@@ -76,6 +76,6 @@ python -u src/run_segger_pipeline.py \
     --models-dir ../data/processed/segger_data/segger_models \
     --sample "$SAMPLE" \
     --workers 4 \
-    --epochs 10
+    --epochs 100
 
 echo "Job finished for $SAMPLE"
