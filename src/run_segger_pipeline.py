@@ -162,7 +162,7 @@ def train_sample(dataset_dir, model_dir, raw_input_dir, args):
     dm = SeggerDataModule(
         data_dir=dataset_dir,
         batch_size=args.batch_size,
-        num_workers=args.workers
+        num_workers=0 # Force 0 to avoid dataloader hangs/deadlocks
     )
     dm.setup()
     
