@@ -23,3 +23,5 @@ torch_spline_conv
 dask-geopandas
 pyarrow
 moscot
+paste-bio
+POT

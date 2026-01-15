@@ -114,7 +114,7 @@ def predict_sample(dataset_dir, model_dir, output_dir, raw_input_dir, args):
             save_cell_masks=False,
             receptive_field=receptive_field,
             # Stereo-seq specific graph parameters (matching create_dataset)
-            tx_graph_mode="grid_same_gene",
+            tx_graph_mode="grid_bins",
             grid_connectivity=8,
             within_bin_edges="star",
             bin_pitch=1.0,
@@ -150,7 +150,7 @@ def create_dataset(input_dir, output_dir, args):
         dist_bd=15.0,
         k_tx=3,
         dist_tx=5.0,
-        tx_graph_mode="grid_same_gene",
+        tx_graph_mode="grid_bins",
         grid_connectivity=8,
         within_bin_edges="star",
         bin_pitch=1.0,
