@@ -140,7 +140,8 @@ def create_dataset(input_dir, output_dir, args):
         base_dir=input_dir,
         n_workers=workers,
         sample_type="saw_bin1",
-        weights=None 
+        weights=None,
+        allow_missing_boundaries=True 
     )
 
     # Save dataset (Create graph)
