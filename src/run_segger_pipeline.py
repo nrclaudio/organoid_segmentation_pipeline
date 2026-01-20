@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid valu
 # Ensure segger is importable
 # Reorganization: segger is now in tools/stereosegger
 # Script in pipeline/src -> parent=pipeline -> parent.parent=root -> tools/stereosegger
-SEGGER_REPO = Path(__file__).resolve().parent.parent.parent / "tools" / "stereosegger"
+SEGGER_REPO = Path(__file__).resolve().parent.parent.parent / "software" / "StereoSegger"
 
 SEGGER_SRC = SEGGER_REPO / "src"
 if str(SEGGER_SRC) not in sys.path:
