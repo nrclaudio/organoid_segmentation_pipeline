@@ -21,6 +21,7 @@ torch_sparse
 torch_cluster
 torch_spline_conv
 dask-geopandas
+dask
 pyarrow
 moscot
 paste-bio

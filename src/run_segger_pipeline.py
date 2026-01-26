@@ -19,9 +19,9 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, message="divide by ze
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in oriented_envelope")
 
 # Ensure segger is importable
-# Reorganization: segger is now in tools/stereosegger
-# Script in pipeline/src -> parent=pipeline -> parent.parent=root -> tools/stereosegger
-SEGGER_REPO = Path(__file__).resolve().parent.parent.parent / "software" / "StereoSegger"
+# Reorganization: segger is now in software/stereosegger
+# Script in pipeline/src -> parent=pipeline -> parent.parent=root -> software/stereosegger
+SEGGER_REPO = Path(__file__).resolve().parent.parent.parent / "software" / "stereosegger"
 
 SEGGER_SRC = SEGGER_REPO / "src"
 if str(SEGGER_SRC) not in sys.path:
